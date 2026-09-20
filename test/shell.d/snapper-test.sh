@@ -69,7 +69,40 @@ cmp -s "$template" "$test_tmp/etc/snapper/configs/root" || fail "snapshot config
 grep -Fx 'SNAPPER_CONFIGS="root"' "$test_tmp/etc/conf.d/snapper" >/dev/null || fail "snapshot configure writes /etc/conf.d/snapper"
 grep -Fx 'systemctl disable --now snapper-timeline.timer' "$test_tmp/calls.log" >/dev/null || fail "snapshot configure disables timeline snapshots"
 grep -Fx 'systemctl enable --now snapper-cleanup.timer limine-snapper-sync.service' "$test_tmp/calls.log" >/dev/null || fail "snapshot configure enables cleanup and Limine snapshot sync"
-pass "snapshot configure normalizes Snapper policy and services"
+pass "snapshot configure installs the default Snapper policy and services for a new config"
+
+custom_config="$test_tmp/etc/snapper/configs/root"
+custom_expected="$test_tmp/custom-root.expected"
+cat >"$custom_config" <<'EOF'
+SUBVOLUME="/"
+FSTYPE="btrfs"
+
+NUMBER_CLEANUP="yes"
+NUMBER_MIN_AGE="7200"
+NUMBER_LIMIT="25"
+NUMBER_LIMIT_IMPORTANT="10"
+
+TIMELINE_CREATE="yes"
+MY_SETTING="keepme"
+EOF
+cp "$custom_config" "$custom_expected"
+: >"$test_tmp/calls.log"
+
+for _ in 1 2; do
+  TEST_LOG="$test_tmp/calls.log" \
+  PATH="$fake_bin:$PATH" \
+  OMARCHY_SNAPPER_CONFIGURE_TEST=1 \
+  OMARCHY_PATH="$ROOT" \
+  OMARCHY_SNAPPER_CONFIG_PATH="$custom_config" \
+  OMARCHY_SNAPPER_CONF_PATH="$test_tmp/etc/conf.d/snapper" \
+    bash -euo pipefail "$ROOT/install/config/snapper.sh" >/dev/null
+done
+
+cmp -s "$custom_expected" "$custom_config" || fail "snapshot configure preserves an existing root retention policy"
+! grep -q '^snapper ' "$test_tmp/calls.log" || fail "snapshot configure does not recreate an existing Snapper root config"
+grep -Fx 'systemctl disable --now snapper-timeline.timer' "$test_tmp/calls.log" >/dev/null || fail "snapshot configure still disables timeline snapshots when preserving custom retention"
+grep -Fx 'systemctl enable --now snapper-cleanup.timer limine-snapper-sync.service' "$test_tmp/calls.log" >/dev/null || fail "snapshot configure still enables cleanup and Limine sync when preserving custom retention"
+pass "snapshot configure preserves existing root retention settings across repeated runs"
 
 setup_system="$ROOT/bin/omarchy-apply-system"
 grep -F 'config/all.sh' "$setup_system" >/dev/null ||
