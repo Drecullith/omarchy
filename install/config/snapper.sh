@@ -12,9 +12,11 @@ if [[ ! -f $SNAPPER_CONFIG_PATH ]]; then
   else
     snapper --no-dbus -c root create-config / >/dev/null 2>&1 || snapper -c root create-config / >/dev/null
   fi
-fi
 
-install -m 0644 "$template" "$SNAPPER_CONFIG_PATH"
+  install -m 0644 "$template" "$SNAPPER_CONFIG_PATH"
+else
+  echo "Preserving existing Snapper root retention policy"
+fi
 
 mkdir -p "$(dirname "$SNAPPER_CONF_PATH")"
 printf '%s\n' 'SNAPPER_CONFIGS="root"' >"$SNAPPER_CONF_PATH"
