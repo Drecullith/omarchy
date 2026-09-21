@@ -28,6 +28,19 @@ mkdir -p "$fake_bin"
 cat >"$fake_bin/snapper" <<'STUB'
 #!/bin/bash
 printf 'snapper %s\n' "$*" >>"$TEST_LOG"
+
+if [[ -n ${SNAPPER_CREATE_PATH:-} && $* == *"create-config /"* ]]; then
+  mkdir -p "$(dirname "$SNAPPER_CREATE_PATH")"
+  cat >"$SNAPPER_CREATE_PATH" <<'EOF'
+SUBVOLUME="/"
+FSTYPE="btrfs"
+NUMBER_CLEANUP="yes"
+NUMBER_MIN_AGE="0"
+NUMBER_LIMIT="50"
+NUMBER_LIMIT_IMPORTANT="10"
+TIMELINE_CREATE="yes"
+EOF
+fi
 STUB
 chmod +x "$fake_bin/snapper"
 
@@ -70,6 +83,45 @@ grep -Fx 'SNAPPER_CONFIGS="root"' "$test_tmp/etc/conf.d/snapper" >/dev/null || f
 grep -Fx 'systemctl disable --now snapper-timeline.timer' "$test_tmp/calls.log" >/dev/null || fail "snapshot configure disables timeline snapshots"
 grep -Fx 'systemctl enable --now snapper-cleanup.timer limine-snapper-sync.service' "$test_tmp/calls.log" >/dev/null || fail "snapshot configure enables cleanup and Limine snapshot sync"
 pass "snapshot configure installs the default Snapper policy and services for a new config"
+
+retry_config="$test_tmp/retry/etc/snapper/configs/root"
+retry_conf="$test_tmp/retry/etc/conf.d/snapper"
+retry_marker="${retry_config}.omarchy-initializing"
+missing_template="$test_tmp/missing-snapper-template"
+: >"$test_tmp/calls.log"
+
+if TEST_LOG="$test_tmp/calls.log" \
+  PATH="$fake_bin:$PATH" \
+  SNAPPER_CREATE_PATH="$retry_config" \
+  OMARCHY_PATH="$ROOT" \
+  OMARCHY_SNAPPER_TEMPLATE="$missing_template" \
+  OMARCHY_SNAPPER_CONFIG_PATH="$retry_config" \
+  OMARCHY_SNAPPER_CONF_PATH="$retry_conf" \
+    bash -euo pipefail "$ROOT/install/config/snapper.sh" >/dev/null 2>&1; then
+  fail "snapshot configure reports a failed fresh-policy install"
+fi
+
+grep -Fx 'NUMBER_LIMIT="50"' "$retry_config" >/dev/null ||
+  fail "failed first initialization leaves the Snapper-created intermediate config for recovery"
+[[ -f $retry_marker ]] ||
+  fail "failed first initialization records that Omarchy still owns the incomplete config"
+
+TEST_LOG="$test_tmp/calls.log" \
+PATH="$fake_bin:$PATH" \
+SNAPPER_CREATE_PATH="$retry_config" \
+OMARCHY_PATH="$ROOT" \
+OMARCHY_SNAPPER_TEMPLATE="$template" \
+OMARCHY_SNAPPER_CONFIG_PATH="$retry_config" \
+OMARCHY_SNAPPER_CONF_PATH="$retry_conf" \
+  bash -euo pipefail "$ROOT/install/config/snapper.sh" >/dev/null
+
+cmp -s "$template" "$retry_config" ||
+  fail "retry completes the intended Omarchy policy after interrupted first initialization"
+[[ ! -e $retry_marker ]] ||
+  fail "successful retry clears the incomplete-initialization marker"
+[[ $(grep -c '^snapper ' "$test_tmp/calls.log") -eq 1 ]] ||
+  fail "retry does not recreate an already-created Snapper root config"
+pass "snapshot configure recovers an interrupted first initialization without treating it as user policy"
 
 custom_config="$test_tmp/etc/snapper/configs/root"
 custom_expected="$test_tmp/custom-root.expected"
